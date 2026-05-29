@@ -243,15 +243,17 @@ def fetch_instagram_post(url: str) -> dict:
     caption   = post.caption or ""
     image_url = post.url
 
-    local_image = None
+    # Download to /tmp so the proxy route can serve it
     try:
         filename = f"{shortcode}.jpg"
         dest = os.path.join(IMAGES_DIR, filename)
         if not os.path.exists(dest):
             urllib.request.urlretrieve(image_url, dest)
-        local_image = f"/static/images/{filename}"
     except Exception:
         pass
+
+    # Always use the proxy route — works on Vercel (no static /tmp exposure)
+    local_image = f"/api/image/{shortcode}"
 
     recipe = parse_recipe(caption)
     return {
@@ -269,6 +271,42 @@ def fetch_instagram_post(url: str) -> dict:
 @app.route("/")
 def index():
     return send_from_directory("templates", "index.html")
+
+
+@app.route("/api/image/<shortcode>")
+def serve_image(shortcode):
+    """
+    Proxy route for recipe thumbnails. Tries the local /tmp cache first;
+    if missing (cold Vercel start), re-fetches from the CDN URL stored in DB.
+    """
+    from flask import Response
+    import re as _re
+
+    # Basic safety check on shortcode
+    if not _re.match(r'^[A-Za-z0-9_-]{1,50}$', shortcode):
+        return "Not found", 404
+
+    filename = f"{shortcode}.jpg"
+    dest = os.path.join(IMAGES_DIR, filename)
+
+    if not os.path.exists(dest):
+        # Re-fetch from CDN URL saved in the DB
+        con = get_db()
+        row = con.execute(
+            "SELECT image_url FROM recipes WHERE shortcode=? LIMIT 1", (shortcode,)
+        ).fetchone()
+        con.close()
+        if not row or not row["image_url"]:
+            return "Not found", 404
+        try:
+            urllib.request.urlretrieve(row["image_url"], dest)
+        except Exception:
+            return "Could not fetch image", 502
+
+    with open(dest, "rb") as f:
+        data = f.read()
+    return Response(data, mimetype="image/jpeg",
+                    headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.route("/api/recipes", methods=["GET"])
