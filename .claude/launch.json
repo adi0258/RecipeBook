@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "recipebook",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["recipebook/app.py"],
+      "port": 5050
+    }
+  ]
+}

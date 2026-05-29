@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Recipe Book</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+  <header>
+    <div class="header-inner">
+      <div class="header-left">
+        <h1>📖 Recipe Book</h1>
+        <p class="subtitle">Paste an Instagram post link to auto-fill a recipe</p>
+      </div>
+      <div class="header-right" id="auth-area">
+        <!-- filled by JS -->
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- Logged-out banner -->
+    <div id="logged-out-banner" class="logged-out-banner" hidden>
+      <div class="banner-icon">🔒</div>
+      <p>Sign in with Google to save and view your personal recipe book.</p>
+      <a class="google-btn" href="/auth/login">
+        <img src="/static/google-icon.svg" alt="" width="20" height="20" />
+        Sign in with Google
+      </a>
+    </div>
+
+    <!-- Add recipe form (only shown when logged in) -->
+    <section class="add-section" id="add-section" hidden>
+      <form id="add-form">
+        <div class="input-row">
+          <input
+            id="url-input"
+            type="url"
+            placeholder="https://www.instagram.com/p/..."
+            autocomplete="off"
+            required
+          />
+          <button type="submit" id="add-btn">
+            <span class="btn-label">Add Recipe</span>
+            <span class="btn-spinner" hidden>⏳</span>
+          </button>
+        </div>
+        <p id="add-error" class="error-msg" hidden></p>
+      </form>
+    </section>
+
+    <!-- Empty state -->
+    <div id="empty-state" class="empty-state" hidden>
+      <div class="empty-icon">🥘</div>
+      <p>No recipes yet. Paste an Instagram link above to get started!</p>
+    </div>
+
+    <!-- Recipe grid -->
+    <section id="grid" class="recipe-grid"></section>
+  </main>
+
+  <!-- Modal -->
+  <div id="modal-overlay" class="modal-overlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true">
+      <button class="modal-close" id="modal-close" aria-label="Close">✕</button>
+      <div id="modal-content"></div>
+    </div>
+  </div>
+
+  <script src="/static/script.js"></script>
+</body>
+</html>
