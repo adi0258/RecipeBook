@@ -25,10 +25,17 @@
     <div id="logged-out-banner" class="logged-out-banner" hidden>
       <div class="banner-icon">🔒</div>
       <p>Sign in with Google to save and view your personal recipe book.</p>
-      <a class="google-btn" href="/auth/login">
-        <img src="/static/google-icon.svg" alt="" width="20" height="20" />
-        Sign in with Google
-      </a>
+
+      <div style="display: flex; gap: 10px; justify-content: center; margin-top: 15px; flex-wrap: wrap;">
+        <a class="google-btn" href="/auth/login">
+          <img src="/static/google-icon.svg" alt="" width="20" height="20" />
+          Sign in with Google
+        </a>
+
+        <a class="google-btn" href="/auth/guest" style="background-color: #e2e8f0; color: #1e293b; text-decoration: none;">
+          👤 Continue as Guest
+        </a>
+      </div>
     </div>
 
     <!-- Add recipe form (only shown when logged in) -->

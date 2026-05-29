@@ -3,6 +3,7 @@ import re
 import sqlite3
 import json
 import instaloader
+import uuid
 import urllib.request
 from flask import (
     Flask, request, jsonify, send_from_directory,
@@ -146,6 +147,21 @@ def auth_logout():
     session.clear()
     return redirect("/")
 
+@app.route("/auth/guest")
+def auth_guest():
+    # יצירת מזהה ייחודי לאורח כדי למנוע התנגשויות
+    guest_id = f"guest_{uuid.uuid4().hex[:16]}"
+
+    # יצירת המשתמש במסד הנתונים
+    user = upsert_user(
+        google_id=guest_id,
+        email=None,
+        name="Guest",
+        picture=None,
+    )
+
+    session["user"] = user
+    return redirect("/")
 
 @app.route("/auth/me")
 def auth_me():
