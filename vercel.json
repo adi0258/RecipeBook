@@ -1,15 +1,29 @@
 {
-    "version": 2,
-    "builds": [
-          {
-                  "src": "recipebook/app.py",
-                  "use": "@vercel/python"
-          }
-    ],
-    "routes": [
-          {
-                  "src": "/(.*)",
-                  "dest": "recipebook/app.py"
-          }
-    ]
+  "version": 2,
+  "builds": [
+    {
+      "src": "recipebook/app.py",
+      "use": "@vercel/python",
+      "config": { "maxLambdaSize": "50mb" }
+    },
+    {
+      "src": "recipebook/static/**",
+      "use": "@vercel/static"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/static/(.*)",
+      "dest": "recipebook/static/$1"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "recipebook/app.py"
+    }
+  ],
+  "functions": {
+    "recipebook/app.py": {
+      "maxDuration": 60
+    }
+  }
 }
