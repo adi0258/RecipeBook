@@ -1,0 +1,15 @@
+{
+    "version": 2,
+    "builds": [
+          {
+                  "src": "recipebook/app.py",
+                  "use": "@vercel/python"
+          }
+    ],
+    "routes": [
+          {
+                  "src": "/(.*)",
+                  "dest": "recipebook/app.py"
+          }
+    ]
+}
