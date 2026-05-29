@@ -16,3 +16,4 @@ main.cpp
 
 # macOS
 .DS_Store
+.vercel
