@@ -20,10 +20,5 @@
       "src": "/(.*)",
       "dest": "recipebook/app.py"
     }
-  ],
-  "functions": {
-    "recipebook/app.py": {
-      "maxDuration": 60
-    }
-  }
+  ]
 }
