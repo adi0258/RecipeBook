@@ -346,6 +346,7 @@ def update_recipe(recipe_id):
     return jsonify(result)
 
 
+init_db()
+
 if __name__ == "__main__":
-    init_db()
     app.run(debug=True, port=5050)
