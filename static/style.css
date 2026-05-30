@@ -384,6 +384,16 @@ details > summary {
   .recipe-two-col { grid-template-columns: 1fr; }
 }
 
+/* ── Footer ── */
+.site-footer {
+  text-align: center;
+  padding: 1.25rem 1rem calc(1.25rem + var(--safe-bottom));
+  font-size: 0.8rem;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  margin-top: 2rem;
+}
+
 /* ── Very small (≤ 380px, iPhone SE) ── */
 @media (max-width: 380px) {
   .recipe-grid { grid-template-columns: 1fr; }
