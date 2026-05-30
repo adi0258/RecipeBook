@@ -83,6 +83,13 @@ app = Flask(
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-in-production")
 CORS(app, supports_credentials=True)
 
+# ── Global error handler — always return JSON, never raw HTML 500 ─────────────
+@app.errorhandler(Exception)
+def _handle_any_exception(e):
+    import traceback
+    traceback.print_exc()
+    return jsonify({"error": str(e)}), 500
+
 IMAGES_DIR = os.environ.get("IMAGES_DIR", "/tmp/recipe_images")
 os.makedirs(IMAGES_DIR, exist_ok=True)
 
@@ -498,60 +505,79 @@ def list_recipes():
 @app.route("/api/recipes", methods=["POST"])
 @login_required
 def add_recipe():
-    uid  = current_user()["id"]
-    data = request.get_json() or {}
-    url  = data.get("url", "").strip()
-    if not url:
-        return jsonify({"error": "url is required"}), 400
-
-    con = get_db()
-    cur = con.cursor()
-    cur.execute(_q("SELECT * FROM recipes WHERE user_id=? AND url=?"), (uid, url))
-    existing = _fetchone(cur)
-    if existing:
-        con.close()
-        existing["ingredients"] = json.loads(existing["ingredients"] or "[]")
-        existing["steps"]       = json.loads(existing["steps"] or "[]")
-        return jsonify(existing)
-
+    con = None
     try:
+        uid  = current_user()["id"]
+        data = request.get_json() or {}
+        url  = data.get("url", "").strip()
+        if not url:
+            return jsonify({"error": "url is required"}), 400
+
+        con = get_db()
+        cur = con.cursor()
+        cur.execute(_q("SELECT * FROM recipes WHERE user_id=? AND url=?"), (uid, url))
+        existing = _fetchone(cur)
+        if existing:
+            con.close()
+            con = None
+            existing["ingredients"] = json.loads(existing["ingredients"] or "[]")
+            existing["steps"]       = json.loads(existing["steps"] or "[]")
+            return jsonify(existing)
+
         info = fetch_instagram_post(url)
-    except Exception as e:
+
+        now = datetime.utcnow().isoformat()
+        if _USE_PG:
+            cur.execute("""
+                INSERT INTO recipes
+                  (user_id, url, shortcode, title, ingredients, steps, raw_caption,
+                   image_url, local_image, author, added_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                RETURNING id
+            """, (uid, info["url"], info["shortcode"], info["title"],
+                  json.dumps(info["ingredients"]), json.dumps(info["steps"]),
+                  info["raw_caption"], info["image_url"], info["local_image"],
+                  info["author"], now))
+            row_id = cur.fetchone()["id"]
+        else:
+            cur.execute("""
+                INSERT INTO recipes
+                  (user_id, url, shortcode, title, ingredients, steps, raw_caption,
+                   image_url, local_image, author, added_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """, (uid, info["url"], info["shortcode"], info["title"],
+                  json.dumps(info["ingredients"]), json.dumps(info["steps"]),
+                  info["raw_caption"], info["image_url"], info["local_image"],
+                  info["author"], now))
+            row_id = cur.lastrowid
+
+        con.commit()
+        cur.execute(_q("SELECT * FROM recipes WHERE id=?"), (row_id,))
+        result = _fetchone(cur)
         con.close()
-        return jsonify({"error": str(e)}), 422
+        con = None
+        result["ingredients"] = json.loads(result["ingredients"] or "[]")
+        result["steps"]       = json.loads(result["steps"] or "[]")
+        return jsonify(result), 201
 
-    now = datetime.utcnow().isoformat()
-    if _USE_PG:
-        cur.execute("""
-            INSERT INTO recipes
-              (user_id, url, shortcode, title, ingredients, steps, raw_caption,
-               image_url, local_image, author, added_at)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            RETURNING id
-        """, (uid, info["url"], info["shortcode"], info["title"],
-              json.dumps(info["ingredients"]), json.dumps(info["steps"]),
-              info["raw_caption"], info["image_url"], info["local_image"],
-              info["author"], now))
-        row_id = cur.fetchone()["id"]
-    else:
-        cur.execute("""
-            INSERT INTO recipes
-              (user_id, url, shortcode, title, ingredients, steps, raw_caption,
-               image_url, local_image, author, added_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
-        """, (uid, info["url"], info["shortcode"], info["title"],
-              json.dumps(info["ingredients"]), json.dumps(info["steps"]),
-              info["raw_caption"], info["image_url"], info["local_image"],
-              info["author"], now))
-        row_id = cur.lastrowid
-
-    con.commit()
-    cur.execute(_q("SELECT * FROM recipes WHERE id=?"), (row_id,))
-    result = _fetchone(cur)
-    con.close()
-    result["ingredients"] = json.loads(result["ingredients"] or "[]")
-    result["steps"]       = json.loads(result["steps"] or "[]")
-    return jsonify(result), 201
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        if con:
+            try:
+                con.rollback()
+            except Exception:
+                pass
+            try:
+                con.close()
+            except Exception:
+                pass
+        msg = str(e)
+        # Surface a friendlier message when Instagram blocks the request
+        if "graphql" in msg.lower() or "403" in msg or "429" in msg or "json" in msg.lower():
+            msg = ("Instagram couldn't be reached right now (Instagram may be "
+                   "blocking automated access). Please try again in a few minutes.")
+        return jsonify({"error": msg}), 422
 
 
 @app.route("/api/recipes/<int:recipe_id>", methods=["DELETE"])
