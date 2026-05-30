@@ -203,8 +203,34 @@ def current_user():
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        if not current_user():
+        user = current_user()
+        if not user:
             return jsonify({"error": "Not authenticated"}), 401
+
+        # Re-verify the user exists in the current DB and refresh the session id.
+        # This protects against stale session ids after a DB migration (e.g. SQLite→Postgres).
+        google_id = user.get("google_id")
+        if google_id:
+            try:
+                con = get_db()
+                cur = con.cursor()
+                cur.execute(_q("SELECT * FROM users WHERE google_id=?"), (google_id,))
+                db_user = _fetchone(cur)
+                con.close()
+                if db_user:
+                    session["user"] = db_user   # refresh with current DB id
+                else:
+                    # User missing from DB (new DB / cleared DB) — re-create them
+                    db_user = upsert_user(
+                        google_id,
+                        user.get("email"),
+                        user.get("name"),
+                        user.get("picture"),
+                    )
+                    session["user"] = db_user
+            except Exception:
+                pass  # fall through using whatever is in the session
+
         return f(*args, **kwargs)
     return decorated
 
