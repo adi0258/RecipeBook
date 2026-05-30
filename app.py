@@ -5,6 +5,7 @@ import json
 import instaloader
 import uuid
 import urllib.request
+from openai import OpenAI
 from flask import (
     Flask, request, jsonify, send_from_directory,
     session, redirect, url_for,
@@ -177,23 +178,86 @@ def auth_me():
 
 
 # ── Recipe parsing ────────────────────────────────────────────────────────────
-def parse_recipe(caption: str) -> dict:
-    if not caption:
-        return {"title": "Untitled Recipe", "ingredients": [], "steps": []}
+_openai_client = None
 
+def _get_openai():
+    global _openai_client
+    if _openai_client is None:
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if api_key:
+            _openai_client = OpenAI(api_key=api_key)
+    return _openai_client
+
+
+def _parse_with_gpt(caption: str) -> dict | None:
+    """Call gpt-4o-mini to extract title, ingredients and steps from a caption.
+    Returns None if the API key is missing or the call fails."""
+    client = _get_openai()
+    if not client:
+        return None
+
+    system_prompt = """You are a recipe parser. Given an Instagram post caption (which may be in any language), extract the recipe and return ONLY valid JSON — no markdown, no explanation.
+
+The JSON must follow this exact structure:
+{
+  "title": "recipe name",
+  "ingredients": [
+    "__section__For the base",
+    "200g biscuit crumbs",
+    "__section__For the filling",
+    "500g cream cheese"
+  ],
+  "steps": [
+    "__section__Prepare the base",
+    "Mix biscuits with melted butter and press into a pan.",
+    "Beat cream cheese with sugar until smooth."
+  ]
+}
+
+Rules:
+- Preserve the original language for all text (do NOT translate).
+- Use "__section__<name>" entries (no colon) to mark sub-group headings inside ingredients or steps.
+- ingredients: list every ingredient on its own line, no bullet symbols.
+- steps: one clear action per item, no numbering.
+- Strip hashtags and unrelated promotional text.
+- If there are no distinct steps (only ingredients), return an empty steps array.
+- If title is unclear, infer it from context."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": caption},
+            ],
+            temperature=0,
+            max_tokens=1200,
+            response_format={"type": "json_object"},
+        )
+        raw = response.choices[0].message.content
+        data = json.loads(raw)
+        return {
+            "title":       data.get("title", "Untitled Recipe"),
+            "ingredients": data.get("ingredients", []),
+            "steps":       data.get("steps", []),
+        }
+    except Exception as e:
+        print(f"[GPT parse error] {e}")
+        return None
+
+
+def _parse_with_regex(caption: str) -> dict:
+    """Regex/heuristic fallback parser."""
     lines = [l.strip() for l in caption.splitlines() if l.strip()]
     title = lines[0] if lines else "Untitled Recipe"
     title = re.sub(r'^[\U00010000-\U0010ffff☀-➿\s]+', '', title).strip() or lines[0]
 
-    # English + Hebrew section headers
     ingredient_headers = re.compile(
         r'(ingredient|what you.?ll need|you.?ll need|needs|for the|materials'
         r'|מצרכים|חומרים|רכיבים)', re.I)
     step_headers = re.compile(
         r'(instruction|direction|method|how to|steps?|preparation|let.?s make|make it|procedure'
         r'|הוראות הכנה|אופן הכנה|שלבי הכנה|דרך הכנה|הכנה\s*:)', re.I)
-
-    # Hebrew measurement units — a strong signal the line is an ingredient
     measurement_re = re.compile(
         r'\b(\d+[\./\d]*\s*('
         r'גרם|ג\'|ק"ג|קג|כוס|כוסות|כף|כפות|כפית|כפיות|מ"ל|מל|ליטר|יח|יחידות'
@@ -208,58 +272,49 @@ def parse_recipe(caption: str) -> dict:
         clean = re.sub(r'#\S+', '', line).strip()
         if not clean or all(w.startswith('#') for w in clean.split()):
             continue
-
-        # Strip leading bullets
         bullet = re.match(r'^[-•✔✅🔸🔹▶️➡️➤*]\s*', clean)
         if bullet:
             clean = clean[bullet.end():]
-
-        # Named section headers  → switch mode, render as sub-header in the list
         if ingredient_headers.search(clean):
             mode = 'ingredients'
-            # Keep it as a sub-header item (prefixed so frontend can style it)
-            label = re.sub(r'[:：]\s*$', '', clean).strip()
-            ingredients.append(f'__section__{label}')
+            ingredients.append(f'__section__{re.sub(r"[:：]\\s*$", "", clean).strip()}')
             continue
         if step_headers.search(clean):
             mode = 'steps'
             continue
-
-        # Short line ending with ":" is a sub-section label (e.g. "לבסיס:", "For the crust:")
         if re.match(r'^.{1,40}[:：]\s*$', clean) and not re.search(r'\d', clean):
             label = clean.rstrip(':：').strip()
             if mode == 'steps':
                 steps.append(f'__section__{label}')
             else:
-                # Unlabelled position → treat as ingredient sub-section, start ingredient mode
                 mode = 'ingredients'
                 ingredients.append(f'__section__{label}')
             continue
-
-        # Numbered step  (e.g. "1. Mix well")
         if re.match(r'^\d+[\.\)]\s', clean):
             mode = 'steps'
             steps.append(re.sub(r'^\d+[\.\)]\s*', '', clean))
             continue
-
         if mode == 'ingredients':
             ingredients.append(clean)
         elif mode == 'steps':
             steps.append(clean)
-        elif mode is None:
-            # No header seen yet — use measurement heuristic to auto-classify
-            if measurement_re.search(clean):
-                mode = 'ingredients'
-                ingredients.append(clean)
-            # else: skip ambiguous lines until a header appears
+        elif mode is None and measurement_re.search(clean):
+            mode = 'ingredients'
+            ingredients.append(clean)
 
-    # Fallback: nothing parsed → put everything in steps
     real_ing = [i for i in ingredients if not i.startswith('__section__')]
     if not real_ing and not steps:
         steps = [re.sub(r'#\S+', '', l).strip() for l in lines[1:] if l.strip()]
         ingredients = []
 
     return {"title": title, "ingredients": ingredients, "steps": steps}
+
+
+def parse_recipe(caption: str) -> dict:
+    if not caption:
+        return {"title": "Untitled Recipe", "ingredients": [], "steps": []}
+    # Try GPT first, fall back to regex if unavailable or erroring
+    return _parse_with_gpt(caption) or _parse_with_regex(caption)
 
 
 def shortcode_from_url(url: str) -> str:
