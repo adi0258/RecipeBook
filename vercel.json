@@ -2,23 +2,23 @@
   "version": 2,
   "builds": [
     {
-      "src": "recipebook/app.py",
+      "src": "app.py",
       "use": "@vercel/python",
       "config": { "maxLambdaSize": "50mb" }
     },
     {
-      "src": "recipebook/static/**",
+      "src": "static/**",
       "use": "@vercel/static"
     }
   ],
   "routes": [
     {
       "src": "/static/(.*)",
-      "dest": "recipebook/static/$1"
+      "dest": "static/$1"
     },
     {
       "src": "/(.*)",
-      "dest": "recipebook/app.py"
+      "dest": "app.py"
     }
   ]
 }
