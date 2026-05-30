@@ -106,6 +106,7 @@ loader = instaloader.Instaloader(
     save_metadata=False,
     compress_json=False,
     quiet=True,
+    max_connection_attempts=2,   # don't retry forever on Vercel
 )
 
 
