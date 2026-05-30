@@ -185,10 +185,20 @@ def parse_recipe(caption: str) -> dict:
     title = lines[0] if lines else "Untitled Recipe"
     title = re.sub(r'^[\U00010000-\U0010ffff☀-➿\s]+', '', title).strip() or lines[0]
 
+    # English + Hebrew section headers
     ingredient_headers = re.compile(
-        r'(ingredient|what you.?ll need|you.?ll need|needs|for the|materials)', re.I)
+        r'(ingredient|what you.?ll need|you.?ll need|needs|for the|materials'
+        r'|מצרכים|חומרים|רכיבים)', re.I)
     step_headers = re.compile(
-        r'(instruction|direction|method|how to|steps?|preparation|let.?s make|make it|procedure)', re.I)
+        r'(instruction|direction|method|how to|steps?|preparation|let.?s make|make it|procedure'
+        r'|הוראות הכנה|אופן הכנה|שלבי הכנה|דרך הכנה|הכנה\s*:)', re.I)
+
+    # Hebrew measurement units — a strong signal the line is an ingredient
+    measurement_re = re.compile(
+        r'\b(\d+[\./\d]*\s*('
+        r'גרם|ג\'|ק"ג|קג|כוס|כוסות|כף|כפות|כפית|כפיות|מ"ל|מל|ליטר|יח|יחידות'
+        r'|cup|tbsp|tsp|g|kg|ml|oz|lb'
+        r'))\b', re.I)
 
     ingredients: list = []
     steps: list = []
@@ -199,29 +209,55 @@ def parse_recipe(caption: str) -> dict:
         if not clean or all(w.startswith('#') for w in clean.split()):
             continue
 
+        # Strip leading bullets
+        bullet = re.match(r'^[-•✔✅🔸🔹▶️➡️➤*]\s*', clean)
+        if bullet:
+            clean = clean[bullet.end():]
+
+        # Named section headers  → switch mode, render as sub-header in the list
         if ingredient_headers.search(clean):
             mode = 'ingredients'
+            # Keep it as a sub-header item (prefixed so frontend can style it)
+            label = re.sub(r'[:：]\s*$', '', clean).strip()
+            ingredients.append(f'__section__{label}')
             continue
         if step_headers.search(clean):
             mode = 'steps'
             continue
 
+        # Short line ending with ":" is a sub-section label (e.g. "לבסיס:", "For the crust:")
+        if re.match(r'^.{1,40}[:：]\s*$', clean) and not re.search(r'\d', clean):
+            label = clean.rstrip(':：').strip()
+            if mode == 'steps':
+                steps.append(f'__section__{label}')
+            else:
+                # Unlabelled position → treat as ingredient sub-section, start ingredient mode
+                mode = 'ingredients'
+                ingredients.append(f'__section__{label}')
+            continue
+
+        # Numbered step  (e.g. "1. Mix well")
         if re.match(r'^\d+[\.\)]\s', clean):
             mode = 'steps'
             steps.append(re.sub(r'^\d+[\.\)]\s*', '', clean))
             continue
 
-        bullet = re.match(r'^[-•✔✅🔸🔹▶️➡️➤*]\s*', clean)
-        if bullet:
-            clean = clean[bullet.end():]
-
         if mode == 'ingredients':
             ingredients.append(clean)
         elif mode == 'steps':
             steps.append(clean)
+        elif mode is None:
+            # No header seen yet — use measurement heuristic to auto-classify
+            if measurement_re.search(clean):
+                mode = 'ingredients'
+                ingredients.append(clean)
+            # else: skip ambiguous lines until a header appears
 
-    if not ingredients and not steps:
+    # Fallback: nothing parsed → put everything in steps
+    real_ing = [i for i in ingredients if not i.startswith('__section__')]
+    if not real_ing and not steps:
         steps = [re.sub(r'#\S+', '', l).strip() for l in lines[1:] if l.strip()]
+        ingredients = []
 
     return {"title": title, "ingredients": ingredients, "steps": steps}
 

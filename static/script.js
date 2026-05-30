@@ -165,6 +165,38 @@ async function deleteRecipe(id) {
 }
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
+function renderIngredients(items) {
+  if (!items.length) return '';
+  const rows = items.map(i => {
+    if (i.startsWith('__section__')) {
+      return `<li class="ing-subsection">${esc(i.replace('__section__', ''))}</li>`;
+    }
+    return `<li>${esc(i)}</li>`;
+  }).join('');
+  return `
+    <div class="recipe-section">
+      <p class="modal-section-title">🧂 Ingredients</p>
+      <ul class="ingredients-list">${rows}</ul>
+    </div>`;
+}
+
+function renderSteps(items) {
+  if (!items.length) return '';
+  let counter = 0;
+  const rows = items.map(s => {
+    if (s.startsWith('__section__')) {
+      return `<li class="step-subsection">${esc(s.replace('__section__', ''))}</li>`;
+    }
+    counter++;
+    return `<li><span class="step-num">${counter}</span><span>${esc(s)}</span></li>`;
+  }).join('');
+  return `
+    <div class="recipe-section">
+      <p class="modal-section-title">👨‍🍳 Instructions</p>
+      <ol class="steps-list">${rows}</ol>
+    </div>`;
+}
+
 function openModal(r) {
   overlay.dataset.openId = r.id;
 
@@ -172,15 +204,8 @@ function openModal(r) {
     ? `<img src="${r.local_image}" alt="${esc(r.title)}" />`
     : `<div class="modal-img-placeholder">🍽️</div>`;
 
-  const ingHtml = r.ingredients.length
-    ? `<p class="modal-section-title">Ingredients</p>
-       <ul class="ingredients-list">${r.ingredients.map(i => `<li>${esc(i)}</li>`).join('')}</ul>`
-    : '';
-
-  const stepsHtml = r.steps.length
-    ? `<p class="modal-section-title">Instructions</p>
-       <ol class="steps-list">${r.steps.map(s => `<li>${esc(s)}</li>`).join('')}</ol>`
-    : '';
+  const hasIngredients = r.ingredients.length > 0;
+  const hasSteps       = r.steps.length > 0;
 
   const rawHtml = r.raw_caption
     ? `<details>
@@ -189,11 +214,19 @@ function openModal(r) {
        </details>`
     : '';
 
+  // Side-by-side when both sections exist, otherwise full-width
+  const recipeSections = (hasIngredients && hasSteps)
+    ? `<div class="recipe-two-col">
+         ${renderIngredients(r.ingredients)}
+         ${renderSteps(r.steps)}
+       </div>`
+    : `${renderIngredients(r.ingredients)}${renderSteps(r.steps)}`;
+
   modalContent.innerHTML = `
     <div class="modal-inner">
       <div class="modal-image">${imgHtml}</div>
       <div class="modal-details">
-        <h2 class="modal-title">${esc(r.title)}</h2>
+        <h2 class="modal-title" dir="auto">${esc(r.title)}</h2>
         <p class="modal-author">
           by <a href="https://www.instagram.com/${esc(r.author || '')}" target="_blank" rel="noopener">
             @${esc(r.author || '—')}
@@ -201,8 +234,7 @@ function openModal(r) {
           &nbsp;·&nbsp;
           <a href="${esc(r.url)}" target="_blank" rel="noopener">View post ↗</a>
         </p>
-        ${ingHtml}
-        ${stepsHtml}
+        ${recipeSections}
         ${rawHtml}
       </div>
     </div>`;
