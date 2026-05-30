@@ -16,9 +16,23 @@ _USE_PG = bool(_DATABASE_URL)
 if _USE_PG:
     import psycopg2
     import psycopg2.extras
+    from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
+
+def _clean_pg_url(url: str) -> str:
+    """Strip connection-string params psycopg2 doesn't understand (e.g. channel_binding)."""
+    parsed = urlparse(url)
+    params = parse_qs(parsed.query, keep_blank_values=True)
+    # Remove params not supported by libpq / psycopg2
+    for key in ("channel_binding",):
+        params.pop(key, None)
+    new_query = urlencode({k: v[0] for k, v in params.items()})
+    return urlunparse(parsed._replace(query=new_query))
 
 def _pg_con():
-    con = psycopg2.connect(_DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    con = psycopg2.connect(
+        _clean_pg_url(_DATABASE_URL),
+        cursor_factory=psycopg2.extras.RealDictCursor,
+    )
     con.autocommit = False
     return con
 
