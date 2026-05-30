@@ -6,6 +6,49 @@ import instaloader
 import uuid
 import urllib.request
 from openai import OpenAI
+
+# ── Database driver abstraction ───────────────────────────────────────────────
+# Use PostgreSQL (psycopg2) when DATABASE_URL is set (Vercel/production),
+# fall back to SQLite for local development.
+_DATABASE_URL = os.environ.get("DATABASE_URL", "")
+_USE_PG = bool(_DATABASE_URL)
+
+if _USE_PG:
+    import psycopg2
+    import psycopg2.extras
+
+def _pg_con():
+    con = psycopg2.connect(_DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    con.autocommit = False
+    return con
+
+def get_db():
+    if _USE_PG:
+        return _pg_con()
+    con = sqlite3.connect(os.environ.get("DB_PATH", "/tmp/recipes.db"))
+    con.row_factory = sqlite3.Row
+    return con
+
+def _ph(n=1):
+    """Return n positional placeholders for the active driver."""
+    if _USE_PG:
+        return tuple(f"%s" for _ in range(n))
+    return tuple("?" for _ in range(n))
+
+def _q(sql: str) -> str:
+    """Convert ? placeholders to %s for PostgreSQL."""
+    if _USE_PG:
+        return sql.replace("?", "%s")
+    return sql
+
+def _fetchone(cur):
+    row = cur.fetchone()
+    if row is None:
+        return None
+    return dict(row)
+
+def _fetchall(cur):
+    return [dict(r) for r in cur.fetchall()]
 from flask import (
     Flask, request, jsonify, send_from_directory,
     session, redirect, url_for,
@@ -26,8 +69,6 @@ app = Flask(
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-in-production")
 CORS(app, supports_credentials=True)
 
-# /tmp is the only writable path on Vercel; falls back to local dir otherwise
-DB_PATH    = os.environ.get("DB_PATH", "/tmp/recipes.db")
 IMAGES_DIR = os.environ.get("IMAGES_DIR", "/tmp/recipe_images")
 os.makedirs(IMAGES_DIR, exist_ok=True)
 
@@ -56,56 +97,80 @@ loader = instaloader.Instaloader(
 
 # ── DB ────────────────────────────────────────────────────────────────────────
 def init_db():
-    con = sqlite3.connect(DB_PATH)
-    con.executescript("""
-        CREATE TABLE IF NOT EXISTS users (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            google_id   TEXT UNIQUE NOT NULL,
-            email       TEXT,
-            name        TEXT,
-            picture     TEXT,
-            created_at  TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS recipes (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            url          TEXT,
-            shortcode    TEXT,
-            title        TEXT,
-            ingredients  TEXT,
-            steps        TEXT,
-            raw_caption  TEXT,
-            image_url    TEXT,
-            local_image  TEXT,
-            author       TEXT,
-            added_at     TEXT,
-            UNIQUE(user_id, url)
-        );
-    """)
+    con = get_db()
+    cur = con.cursor()
+    if _USE_PG:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id         SERIAL PRIMARY KEY,
+                google_id  TEXT UNIQUE NOT NULL,
+                email      TEXT,
+                name       TEXT,
+                picture    TEXT,
+                created_at TEXT
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS recipes (
+                id          SERIAL PRIMARY KEY,
+                user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                url         TEXT,
+                shortcode   TEXT,
+                title       TEXT,
+                ingredients TEXT,
+                steps       TEXT,
+                raw_caption TEXT,
+                image_url   TEXT,
+                local_image TEXT,
+                author      TEXT,
+                added_at    TEXT,
+                UNIQUE(user_id, url)
+            )
+        """)
+    else:
+        con.executescript("""
+            CREATE TABLE IF NOT EXISTS users (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                google_id   TEXT UNIQUE NOT NULL,
+                email       TEXT,
+                name        TEXT,
+                picture     TEXT,
+                created_at  TEXT
+            );
+            CREATE TABLE IF NOT EXISTS recipes (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                url          TEXT,
+                shortcode    TEXT,
+                title        TEXT,
+                ingredients  TEXT,
+                steps        TEXT,
+                raw_caption  TEXT,
+                image_url    TEXT,
+                local_image  TEXT,
+                author       TEXT,
+                added_at     TEXT,
+                UNIQUE(user_id, url)
+            );
+        """)
     con.commit()
     con.close()
-
-
-def get_db():
-    con = sqlite3.connect(DB_PATH)
-    con.row_factory = sqlite3.Row
-    return con
 
 
 def upsert_user(google_id, email, name, picture):
     con = get_db()
-    con.execute(
-        """INSERT INTO users (google_id, email, name, picture, created_at)
-           VALUES (?,?,?,?,?)
-           ON CONFLICT(google_id) DO UPDATE SET
-             email=excluded.email, name=excluded.name, picture=excluded.picture""",
-        (google_id, email, name, picture, datetime.utcnow().isoformat()),
-    )
+    cur = con.cursor()
+    cur.execute(_q("""
+        INSERT INTO users (google_id, email, name, picture, created_at)
+        VALUES (?,?,?,?,?)
+        ON CONFLICT(google_id) DO UPDATE SET
+          email=excluded.email, name=excluded.name, picture=excluded.picture
+    """), (google_id, email, name, picture, datetime.utcnow().isoformat()))
     con.commit()
-    row = con.execute("SELECT * FROM users WHERE google_id=?", (google_id,)).fetchone()
+    cur.execute(_q("SELECT * FROM users WHERE google_id=?"), (google_id,))
+    row = _fetchone(cur)
     con.close()
-    return dict(row)
+    return row
 
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
@@ -383,11 +448,11 @@ def serve_image(shortcode):
     if not os.path.exists(dest):
         # Re-fetch from CDN URL saved in the DB
         con = get_db()
-        row = con.execute(
-            "SELECT image_url FROM recipes WHERE shortcode=? LIMIT 1", (shortcode,)
-        ).fetchone()
+        cur = con.cursor()
+        cur.execute(_q("SELECT image_url FROM recipes WHERE shortcode=? LIMIT 1"), (shortcode,))
+        row = _fetchone(cur)
         con.close()
-        if not row or not row["image_url"]:
+        if not row or not row.get("image_url"):
             return "Not found", 404
         try:
             urllib.request.urlretrieve(row["image_url"], dest)
@@ -405,16 +470,14 @@ def serve_image(shortcode):
 def list_recipes():
     uid = current_user()["id"]
     con = get_db()
-    rows = con.execute(
-        "SELECT * FROM recipes WHERE user_id=? ORDER BY added_at DESC", (uid,)
-    ).fetchall()
+    cur = con.cursor()
+    cur.execute(_q("SELECT * FROM recipes WHERE user_id=? ORDER BY added_at DESC"), (uid,))
+    rows = _fetchall(cur)
     con.close()
-    return jsonify([
-        {**dict(r),
-         "ingredients": json.loads(r["ingredients"] or "[]"),
-         "steps": json.loads(r["steps"] or "[]")}
-        for r in rows
-    ])
+    for r in rows:
+        r["ingredients"] = json.loads(r["ingredients"] or "[]")
+        r["steps"]       = json.loads(r["steps"] or "[]")
+    return jsonify(rows)
 
 
 @app.route("/api/recipes", methods=["POST"])
@@ -427,15 +490,14 @@ def add_recipe():
         return jsonify({"error": "url is required"}), 400
 
     con = get_db()
-    existing = con.execute(
-        "SELECT * FROM recipes WHERE user_id=? AND url=?", (uid, url)
-    ).fetchone()
+    cur = con.cursor()
+    cur.execute(_q("SELECT * FROM recipes WHERE user_id=? AND url=?"), (uid, url))
+    existing = _fetchone(cur)
     if existing:
         con.close()
-        row = dict(existing)
-        row["ingredients"] = json.loads(row["ingredients"] or "[]")
-        row["steps"]       = json.loads(row["steps"] or "[]")
-        return jsonify(row)
+        existing["ingredients"] = json.loads(existing["ingredients"] or "[]")
+        existing["steps"]       = json.loads(existing["steps"] or "[]")
+        return jsonify(existing)
 
     try:
         info = fetch_instagram_post(url)
@@ -444,21 +506,34 @@ def add_recipe():
         return jsonify({"error": str(e)}), 422
 
     now = datetime.utcnow().isoformat()
-    con.execute(
-        """INSERT INTO recipes
-           (user_id, url, shortcode, title, ingredients, steps, raw_caption,
-            image_url, local_image, author, added_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-        (uid, info["url"], info["shortcode"], info["title"],
-         json.dumps(info["ingredients"]), json.dumps(info["steps"]),
-         info["raw_caption"], info["image_url"], info["local_image"],
-         info["author"], now),
-    )
+    if _USE_PG:
+        cur.execute("""
+            INSERT INTO recipes
+              (user_id, url, shortcode, title, ingredients, steps, raw_caption,
+               image_url, local_image, author, added_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            RETURNING id
+        """, (uid, info["url"], info["shortcode"], info["title"],
+              json.dumps(info["ingredients"]), json.dumps(info["steps"]),
+              info["raw_caption"], info["image_url"], info["local_image"],
+              info["author"], now))
+        row_id = cur.fetchone()["id"]
+    else:
+        cur.execute("""
+            INSERT INTO recipes
+              (user_id, url, shortcode, title, ingredients, steps, raw_caption,
+               image_url, local_image, author, added_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        """, (uid, info["url"], info["shortcode"], info["title"],
+              json.dumps(info["ingredients"]), json.dumps(info["steps"]),
+              info["raw_caption"], info["image_url"], info["local_image"],
+              info["author"], now))
+        row_id = cur.lastrowid
+
     con.commit()
-    row_id = con.execute("SELECT last_insert_rowid()").fetchone()[0]
-    row    = con.execute("SELECT * FROM recipes WHERE id=?", (row_id,)).fetchone()
+    cur.execute(_q("SELECT * FROM recipes WHERE id=?"), (row_id,))
+    result = _fetchone(cur)
     con.close()
-    result = dict(row)
     result["ingredients"] = json.loads(result["ingredients"] or "[]")
     result["steps"]       = json.loads(result["steps"] or "[]")
     return jsonify(result), 201
@@ -469,7 +544,8 @@ def add_recipe():
 def delete_recipe(recipe_id):
     uid = current_user()["id"]
     con = get_db()
-    con.execute("DELETE FROM recipes WHERE id=? AND user_id=?", (recipe_id, uid))
+    cur = con.cursor()
+    cur.execute(_q("DELETE FROM recipes WHERE id=? AND user_id=?"), (recipe_id, uid))
     con.commit()
     con.close()
     return jsonify({"ok": True})
@@ -481,19 +557,20 @@ def update_recipe(recipe_id):
     uid  = current_user()["id"]
     data = request.get_json() or {}
     con  = get_db()
+    cur  = con.cursor()
     if "title" in data:
-        con.execute("UPDATE recipes SET title=? WHERE id=? AND user_id=?",
+        cur.execute(_q("UPDATE recipes SET title=? WHERE id=? AND user_id=?"),
                     (data["title"], recipe_id, uid))
     if "ingredients" in data:
-        con.execute("UPDATE recipes SET ingredients=? WHERE id=? AND user_id=?",
+        cur.execute(_q("UPDATE recipes SET ingredients=? WHERE id=? AND user_id=?"),
                     (json.dumps(data["ingredients"]), recipe_id, uid))
     if "steps" in data:
-        con.execute("UPDATE recipes SET steps=? WHERE id=? AND user_id=?",
+        cur.execute(_q("UPDATE recipes SET steps=? WHERE id=? AND user_id=?"),
                     (json.dumps(data["steps"]), recipe_id, uid))
     con.commit()
-    row = con.execute("SELECT * FROM recipes WHERE id=?", (recipe_id,)).fetchone()
+    cur.execute(_q("SELECT * FROM recipes WHERE id=?"), (recipe_id,))
+    result = _fetchone(cur)
     con.close()
-    result = dict(row)
     result["ingredients"] = json.loads(result["ingredients"] or "[]")
     result["steps"]       = json.loads(result["steps"] or "[]")
     return jsonify(result)
