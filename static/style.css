@@ -1,6 +1,12 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 [hidden] { display: none !important; }
 
+/* ── RTL support ── */
+[dir="rtl"] { text-align: right; }
+[dir="rtl"].ingredients-list,
+[dir="rtl"].steps-list { padding-inline-start: 0; padding-inline-end: 1.4rem; }
+[dir="rtl"] .step-num { margin-right: 0; margin-left: 0.6rem; }
+
 :root {
   --bg: #faf8f4;
   --surface: #ffffff;

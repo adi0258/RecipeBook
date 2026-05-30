@@ -92,12 +92,13 @@ function renderGrid() {
       ? `<img class="card-thumb" src="${r.local_image}" alt="${esc(r.title)}" loading="lazy" />`
       : `<div class="card-thumb-placeholder">🍽️</div>`;
 
+    const dir = recipeDir(r);
     card.innerHTML = `
       ${imgHtml}
-      <div class="card-body">
+      <div class="card-body" dir="${dir}">
         <div class="card-title">${esc(r.title)}</div>
-        <div class="card-meta">by @${esc(r.author || '—')}</div>
-        <div class="card-counts">
+        <div class="card-meta" dir="ltr">by @${esc(r.author || '—')}</div>
+        <div class="card-counts" dir="ltr">
           ${r.ingredients.length} ingredients · ${r.steps.length} steps
         </div>
         <button class="card-delete" data-id="${r.id}" title="Remove recipe">✕ Remove</button>
@@ -165,7 +166,7 @@ async function deleteRecipe(id) {
 }
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
-function renderIngredients(items) {
+function renderIngredients(items, dir = 'ltr') {
   if (!items.length) return '';
   const rows = items.map(i => {
     if (i.startsWith('__section__')) {
@@ -176,11 +177,11 @@ function renderIngredients(items) {
   return `
     <div class="recipe-section">
       <p class="modal-section-title">🧂 Ingredients</p>
-      <ul class="ingredients-list">${rows}</ul>
+      <ul class="ingredients-list" dir="${dir}">${rows}</ul>
     </div>`;
 }
 
-function renderSteps(items) {
+function renderSteps(items, dir = 'ltr') {
   if (!items.length) return '';
   let counter = 0;
   const rows = items.map(s => {
@@ -193,12 +194,14 @@ function renderSteps(items) {
   return `
     <div class="recipe-section">
       <p class="modal-section-title">👨‍🍳 Instructions</p>
-      <ol class="steps-list">${rows}</ol>
+      <ol class="steps-list" dir="${dir}">${rows}</ol>
     </div>`;
 }
 
 function openModal(r) {
   overlay.dataset.openId = r.id;
+
+  const dir = recipeDir(r);
 
   const imgHtml = r.local_image
     ? `<img src="${r.local_image}" alt="${esc(r.title)}" />`
@@ -210,24 +213,24 @@ function openModal(r) {
   const rawHtml = r.raw_caption
     ? `<details>
          <summary>View original caption</summary>
-         <pre class="raw-caption">${esc(r.raw_caption)}</pre>
+         <pre class="raw-caption" dir="${dir}">${esc(r.raw_caption)}</pre>
        </details>`
     : '';
 
   // Side-by-side when both sections exist, otherwise full-width
   const recipeSections = (hasIngredients && hasSteps)
     ? `<div class="recipe-two-col">
-         ${renderIngredients(r.ingredients)}
-         ${renderSteps(r.steps)}
+         ${renderIngredients(r.ingredients, dir)}
+         ${renderSteps(r.steps, dir)}
        </div>`
-    : `${renderIngredients(r.ingredients)}${renderSteps(r.steps)}`;
+    : `${renderIngredients(r.ingredients, dir)}${renderSteps(r.steps, dir)}`;
 
   modalContent.innerHTML = `
     <div class="modal-inner">
       <div class="modal-image">${imgHtml}</div>
       <div class="modal-details">
-        <h2 class="modal-title" dir="auto">${esc(r.title)}</h2>
-        <p class="modal-author">
+        <h2 class="modal-title" dir="${dir}">${esc(r.title)}</h2>
+        <p class="modal-author" dir="ltr">
           by <a href="https://www.instagram.com/${esc(r.author || '')}" target="_blank" rel="noopener">
             @${esc(r.author || '—')}
           </a>
@@ -258,6 +261,21 @@ function esc(str) {
   return String(str ?? '')
     .replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/** Returns true when the string contains Hebrew (or Arabic) characters. */
+function isRTL(str) {
+  return /[֐-׿؀-ۿ]/.test(str ?? '');
+}
+
+/**
+ * Returns the best dir attribute value for a block of text.
+ * Uses "rtl" for Hebrew/Arabic, "ltr" for everything else.
+ * Pass a recipe object to check title + first ingredient/step together.
+ */
+function recipeDir(r) {
+  const probe = [r.title, ...(r.ingredients || []), ...(r.steps || [])].join(' ');
+  return isRTL(probe) ? 'rtl' : 'ltr';
 }
 
 init();
