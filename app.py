@@ -104,17 +104,20 @@ google = oauth.register(
 )
 
 # ── Instaloader ───────────────────────────────────────────────────────────────
-loader = instaloader.Instaloader(
-    download_pictures=False,
-    download_videos=False,
-    download_video_thumbnails=False,
-    download_geotags=False,
-    download_comments=False,
-    save_metadata=False,
-    compress_json=False,
-    quiet=True,
-    max_connection_attempts=2,   # don't retry forever on Vercel
-)
+def _make_loader():
+    return instaloader.Instaloader(
+        download_pictures=False,
+        download_videos=False,
+        download_video_thumbnails=False,
+        download_geotags=False,
+        download_comments=False,
+        save_metadata=False,
+        compress_json=False,
+        quiet=True,
+        max_connection_attempts=2,
+    )
+
+loader = _make_loader()
 
 
 # ── DB ────────────────────────────────────────────────────────────────────────
@@ -437,33 +440,46 @@ def shortcode_from_url(url: str) -> str:
     return m.group(1)
 
 
+def _fetch_post_with_fresh_loader(shortcode: str):
+    """Fetch an Instagram post using a brand-new loader context each time.
+    A stale context can cause NoneType errors when Instagram returns
+    an unexpected response, so we never reuse the module-level loader."""
+    fresh = _make_loader()
+    return instaloader.Post.from_shortcode(fresh.context, shortcode)
+
+
 def fetch_instagram_post(url: str) -> dict:
     shortcode = shortcode_from_url(url)
     try:
-        post = instaloader.Post.from_shortcode(loader.context, shortcode)
+        post = _fetch_post_with_fresh_loader(shortcode)
     except Exception as e:
-        raise RuntimeError(f"Failed to fetch post: {e}")
+        msg = str(e)
+        if not msg or "NoneType" in msg or "subscriptable" in msg:
+            msg = ("Instagram returned an unexpected response. "
+                   "The post may be private, or Instagram may be "
+                   "temporarily blocking automated access. Please try again.")
+        raise RuntimeError(msg)
 
     caption   = post.caption or ""
-    image_url = post.url
+    image_url = post.url or ""
 
     # Download to /tmp so the proxy route can serve it
-    try:
-        filename = f"{shortcode}.jpg"
-        dest = os.path.join(IMAGES_DIR, filename)
-        if not os.path.exists(dest):
-            urllib.request.urlretrieve(image_url, dest)
-    except Exception:
-        pass
+    if image_url:
+        try:
+            filename = f"{shortcode}.jpg"
+            dest = os.path.join(IMAGES_DIR, filename)
+            if not os.path.exists(dest):
+                urllib.request.urlretrieve(image_url, dest)
+        except Exception:
+            pass
 
-    # Always use the proxy route — works on Vercel (no static /tmp exposure)
     local_image = f"/api/image/{shortcode}"
 
     recipe = parse_recipe(caption)
     return {
         "shortcode": shortcode,
         "url": url,
-        "author": post.owner_username,
+        "author": getattr(post, "owner_username", "") or "",
         "raw_caption": caption,
         "image_url": image_url,
         "local_image": local_image,
@@ -494,17 +510,44 @@ def serve_image(shortcode):
     dest = os.path.join(IMAGES_DIR, filename)
 
     if not os.path.exists(dest):
-        # Re-fetch from CDN URL saved in the DB
         con = get_db()
         cur = con.cursor()
         cur.execute(_q("SELECT image_url FROM recipes WHERE shortcode=? LIMIT 1"), (shortcode,))
         row = _fetchone(cur)
         con.close()
-        if not row or not row.get("image_url"):
+        if not row:
             return "Not found", 404
-        try:
-            urllib.request.urlretrieve(row["image_url"], dest)
-        except Exception:
+
+        cdn_url = row.get("image_url") or ""
+
+        # Try the stored CDN URL first
+        downloaded = False
+        if cdn_url:
+            try:
+                urllib.request.urlretrieve(cdn_url, dest)
+                downloaded = True
+            except Exception:
+                pass
+
+        # Stored URL expired — ask Instagram for a fresh one
+        if not downloaded:
+            try:
+                post = _fetch_post_with_fresh_loader(shortcode)
+                cdn_url = post.url or ""
+                if cdn_url:
+                    urllib.request.urlretrieve(cdn_url, dest)
+                    downloaded = True
+                    # Persist the refreshed URL so future requests don't re-fetch
+                    con2 = get_db()
+                    cur2 = con2.cursor()
+                    cur2.execute(_q("UPDATE recipes SET image_url=? WHERE shortcode=?"),
+                                 (cdn_url, shortcode))
+                    con2.commit()
+                    con2.close()
+            except Exception:
+                pass
+
+        if not downloaded:
             return "Could not fetch image", 502
 
     with open(dest, "rb") as f:

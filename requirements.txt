@@ -1,6 +1,6 @@
 flask>=3.0
 flask-cors>=4.0
-instaloader>=4.10
+instaloader>=4.13
 authlib>=1.0
 requests>=2.28
 openai>=1.0
