@@ -155,8 +155,9 @@ def init_db():
                 UNIQUE(user_id, url)
             )
         """)
-        # Migration for tables created before image_data existed
+        # Migrations for tables created before these columns existed
         cur.execute("ALTER TABLE recipes ADD COLUMN IF NOT EXISTS image_data TEXT")
+        cur.execute("ALTER TABLE recipes ADD COLUMN IF NOT EXISTS category TEXT")
     else:
         con.executescript("""
             CREATE TABLE IF NOT EXISTS users (
@@ -184,10 +185,11 @@ def init_db():
                 UNIQUE(user_id, url)
             );
         """)
-        try:
-            con.execute("ALTER TABLE recipes ADD COLUMN image_data TEXT")
-        except sqlite3.OperationalError:
-            pass  # column already exists
+        for col in ("image_data TEXT", "category TEXT"):
+            try:
+                con.execute(f"ALTER TABLE recipes ADD COLUMN {col}")
+            except sqlite3.OperationalError:
+                pass  # column already exists
     con.commit()
     con.close()
 
@@ -304,6 +306,23 @@ def auth_me():
 
 
 # ── Recipe parsing ────────────────────────────────────────────────────────────
+CATEGORIES = [
+    "אפייה",
+    "קינוח",
+    "בישול יומיומי",
+    "נשנוש ביניים",
+    "סלטים",
+    "מרקים",
+    "משקאות",
+    "אחר",
+]
+
+
+def _normalize_category(cat: str) -> str:
+    cat = (cat or "").strip()
+    return cat if cat in CATEGORIES else "אחר"
+
+
 _openai_client = None
 
 def _get_openai():
@@ -327,6 +346,7 @@ def _parse_with_gpt(caption: str) -> dict | None:
 The JSON must follow this exact structure:
 {
   "title": "recipe name",
+  "category": "one of the allowed categories",
   "ingredients": [
     "__section__For the base",
     "200g biscuit crumbs",
@@ -342,6 +362,11 @@ The JSON must follow this exact structure:
 
 Rules:
 - Preserve the original language for all text (do NOT translate).
+- category MUST be exactly one of these Hebrew values:
+  "אפייה" (breads, pastries, doughs), "קינוח" (cakes, cookies, sweets),
+  "בישול יומיומי" (everyday savory cooking, mains, sides),
+  "נשנוש ביניים" (snacks, energy bites, finger food),
+  "סלטים" (salads), "מרקים" (soups), "משקאות" (drinks, smoothies), "אחר" (anything else).
 - Use "__section__<name>" entries (no colon) to mark sub-group headings inside ingredients or steps.
 - ingredients: list every ingredient on its own line, no bullet symbols.
 - steps: one clear action per item, no numbering.
@@ -364,12 +389,30 @@ Rules:
         data = json.loads(raw)
         return {
             "title":       data.get("title", "Untitled Recipe"),
+            "category":    _normalize_category(data.get("category", "")),
             "ingredients": data.get("ingredients", []),
             "steps":       data.get("steps", []),
         }
     except Exception as e:
         print(f"[GPT parse error] {e}")
         return None
+
+
+def _guess_category(caption: str) -> str:
+    """Keyword heuristic used when GPT is unavailable."""
+    c = caption or ""
+    rules = [
+        ("משקאות",       r'שייק|סמוזי|משקה|קוקטייל|לימונדה|קפה קר'),
+        ("מרקים",        r'מרק'),
+        ("סלטים",        r'סלט'),
+        ("קינוח",        r'\bעוג|מוס|קינוח|גלידה|בראוניז|פאדג|טירמיסו|מלבי|קרם שניט'),
+        ("אפייה",        r'לחם|חלה|פוקצ|מאפה|בצק שמרים|פיתות|בייגל|קרואסון|בורקס'),
+        ("נשנוש ביניים", r'חטיף|כדורי אנרגיה|נשנוש|קרקר|צ\'יפס'),
+    ]
+    for cat, pattern in rules:
+        if re.search(pattern, c):
+            return cat
+    return "בישול יומיומי"
 
 
 def _parse_with_regex(caption: str) -> dict:
@@ -433,12 +476,14 @@ def _parse_with_regex(caption: str) -> dict:
         steps = [re.sub(r'#\S+', '', l).strip() for l in lines[1:] if l.strip()]
         ingredients = []
 
-    return {"title": title, "ingredients": ingredients, "steps": steps}
+    return {"title": title, "category": _guess_category(caption),
+            "ingredients": ingredients, "steps": steps}
 
 
 def parse_recipe(caption: str) -> dict:
     if not caption:
-        return {"title": "Untitled Recipe", "ingredients": [], "steps": []}
+        return {"title": "Untitled Recipe", "category": "אחר",
+                "ingredients": [], "steps": []}
     # Try GPT first, fall back to regex if unavailable or erroring
     return _parse_with_gpt(caption) or _parse_with_regex(caption)
 
@@ -717,14 +762,15 @@ def add_recipe():
             info = fetch_instagram_post(url)
 
         now = datetime.utcnow().isoformat()
+        category = _normalize_category(info.get("category", ""))
         if _USE_PG:
             cur.execute("""
                 INSERT INTO recipes
-                  (user_id, url, shortcode, title, ingredients, steps, raw_caption,
-                   image_url, image_data, local_image, author, added_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                  (user_id, url, shortcode, title, category, ingredients, steps,
+                   raw_caption, image_url, image_data, local_image, author, added_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 RETURNING id
-            """, (uid, info["url"], info["shortcode"], info["title"],
+            """, (uid, info["url"], info["shortcode"], info["title"], category,
                   json.dumps(info["ingredients"]), json.dumps(info["steps"]),
                   info["raw_caption"], info["image_url"], info["image_data"],
                   info["local_image"], info["author"], now))
@@ -732,10 +778,10 @@ def add_recipe():
         else:
             cur.execute("""
                 INSERT INTO recipes
-                  (user_id, url, shortcode, title, ingredients, steps, raw_caption,
-                   image_url, image_data, local_image, author, added_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-            """, (uid, info["url"], info["shortcode"], info["title"],
+                  (user_id, url, shortcode, title, category, ingredients, steps,
+                   raw_caption, image_url, image_data, local_image, author, added_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (uid, info["url"], info["shortcode"], info["title"], category,
                   json.dumps(info["ingredients"]), json.dumps(info["steps"]),
                   info["raw_caption"], info["image_url"], info["image_data"],
                   info["local_image"], info["author"], now))
@@ -792,6 +838,9 @@ def update_recipe(recipe_id):
     if "title" in data:
         cur.execute(_q("UPDATE recipes SET title=? WHERE id=? AND user_id=?"),
                     (data["title"], recipe_id, uid))
+    if "category" in data:
+        cur.execute(_q("UPDATE recipes SET category=? WHERE id=? AND user_id=?"),
+                    (_normalize_category(data["category"]), recipe_id, uid))
     if "ingredients" in data:
         cur.execute(_q("UPDATE recipes SET ingredients=? WHERE id=? AND user_id=?"),
                     (json.dumps(data["ingredients"]), recipe_id, uid))

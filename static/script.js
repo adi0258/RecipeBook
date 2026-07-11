@@ -1,7 +1,11 @@
 const API = '';
 
+const CATEGORIES = ['אפייה', 'קינוח', 'בישול יומיומי', 'נשנוש ביניים', 'סלטים', 'מרקים', 'משקאות', 'אחר'];
+
 let recipes = [];
 let currentUser = null;
+let currentFilter = 'all';
+let searchQuery = '';
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 const authArea       = document.getElementById('auth-area');
@@ -14,6 +18,15 @@ const addError       = document.getElementById('add-error');
 const btnLabel       = addBtn.querySelector('.btn-label');
 const btnSpinner     = addBtn.querySelector('.btn-spinner');
 const grid           = document.getElementById('grid');
+const filterBar      = document.getElementById('filter-bar');
+const toolbar        = document.getElementById('toolbar');
+const searchInput    = document.getElementById('search-input');
+const pantryBtn      = document.getElementById('pantry-btn');
+const pantryOverlay  = document.getElementById('pantry-overlay');
+const pantryClose    = document.getElementById('pantry-close');
+const pantryInput    = document.getElementById('pantry-input');
+const pantrySearch   = document.getElementById('pantry-search');
+const pantryResults  = document.getElementById('pantry-results');
 const emptyState     = document.getElementById('empty-state');
 const overlay        = document.getElementById('modal-overlay');
 const modalClose     = document.getElementById('modal-close');
@@ -74,16 +87,56 @@ function renderAppShell() {
   addSection.hidden      = !loggedIn;
   if (!loggedIn) {
     emptyState.hidden = true;
+    toolbar.hidden    = true;
     grid.innerHTML    = '';
   }
 }
 
+// ── Category filter bar ───────────────────────────────────────────────────────
+function recipeCategory(r) {
+  return r.category || 'אחר';
+}
+
+function renderFilterBar() {
+  const cats = CATEGORIES.filter(c => recipes.some(r => recipeCategory(r) === c));
+  filterBar.hidden = recipes.length === 0 || cats.length < 2;
+  if (filterBar.hidden) { currentFilter = 'all'; filterBar.innerHTML = ''; return; }
+
+  // Reset filter if its category disappeared (e.g. last recipe deleted)
+  if (currentFilter !== 'all' && !cats.includes(currentFilter)) currentFilter = 'all';
+
+  const chips = [
+    { key: 'all', label: 'הכל' },
+    ...cats.map(c => ({ key: c, label: c })),
+  ];
+  filterBar.innerHTML = chips.map(c => `
+    <button class="filter-chip ${currentFilter === c.key ? 'active' : ''}" data-cat="${esc(c.key)}">
+      ${esc(c.label)}
+    </button>`).join('');
+
+  filterBar.querySelectorAll('.filter-chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      currentFilter = btn.dataset.cat;
+      renderGrid();
+    });
+  });
+}
+
 // ── Render grid ───────────────────────────────────────────────────────────────
 function renderGrid() {
+  renderFilterBar();
   grid.innerHTML = '';
   emptyState.hidden = recipes.length > 0;
+  toolbar.hidden = recipes.length === 0;
 
-  recipes.forEach(r => {
+  let visible = currentFilter === 'all'
+    ? recipes
+    : recipes.filter(r => recipeCategory(r) === currentFilter);
+
+  const q = searchQuery.toLowerCase();
+  if (q) visible = visible.filter(r => (r.title || '').toLowerCase().includes(q));
+
+  visible.forEach(r => {
     const card = document.createElement('div');
     card.className = 'card';
     card.dataset.id = r.id;
@@ -96,6 +149,7 @@ function renderGrid() {
     card.innerHTML = `
       ${imgHtml}
       <div class="card-body" dir="${dir}">
+        <span class="card-category">${esc(recipeCategory(r))}</span>
         <div class="card-title">${esc(r.title)}</div>
         <div class="card-meta" dir="ltr">by @${esc(r.author || '—')}</div>
         <div class="card-counts" dir="ltr">
@@ -290,6 +344,10 @@ function openModal(r) {
        </div>`
     : `${renderIngredients(r.ingredients, dir)}${renderSteps(r.steps, dir)}`;
 
+  const categoryOptions = CATEGORIES.map(c =>
+    `<option value="${esc(c)}" ${c === recipeCategory(r) ? 'selected' : ''}>${esc(c)}</option>`
+  ).join('');
+
   modalContent.innerHTML = `
     <div class="modal-inner">
       <div class="modal-image">${imgHtml}</div>
@@ -302,10 +360,32 @@ function openModal(r) {
           &nbsp;·&nbsp;
           <a href="${esc(r.url)}" target="_blank" rel="noopener">View post ↗</a>
         </p>
+        <label class="category-row">
+          <span class="category-label">קטגוריה</span>
+          <select id="modal-category" class="category-select">${categoryOptions}</select>
+        </label>
         ${recipeSections}
         ${rawHtml}
       </div>
     </div>`;
+
+  modalContent.querySelector('#modal-category').addEventListener('change', async (e) => {
+    try {
+      const res = await fetch(`${API}/api/recipes/${r.id}`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category: e.target.value }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        const idx = recipes.findIndex(x => x.id === r.id);
+        if (idx !== -1) recipes[idx] = updated;
+        r.category = updated.category;
+        renderGrid();
+      }
+    } catch { /* keep previous value on failure */ }
+  });
 
   overlay.hidden = false;
   document.body.style.overflow = 'hidden';
@@ -319,7 +399,94 @@ function closeModal() {
 
 modalClose.addEventListener('click', closeModal);
 overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { closeModal(); closePantry(); }
+});
+
+// ── Search ────────────────────────────────────────────────────────────────────
+searchInput.addEventListener('input', () => {
+  searchQuery = searchInput.value.trim();
+  renderGrid();
+});
+
+// ── Pantry matcher ────────────────────────────────────────────────────────────
+function openPantry() {
+  pantryOverlay.hidden = false;
+  document.body.style.overflow = 'hidden';
+  pantryInput.value = localStorage.getItem('pantry') || '';
+  if (pantryInput.value) runPantrySearch();
+  pantryInput.focus();
+}
+
+function closePantry() {
+  pantryOverlay.hidden = true;
+  document.body.style.overflow = '';
+}
+
+function parsePantryItems(text) {
+  return text
+    .split(/[,\n]/)
+    .map(s => s.trim().toLowerCase())
+    .filter(s => s.length >= 2);
+}
+
+function runPantrySearch() {
+  const items = parsePantryItems(pantryInput.value);
+  localStorage.setItem('pantry', pantryInput.value);
+
+  if (!items.length) {
+    pantryResults.innerHTML = '<p class="pantry-empty">הזינו לפחות מצרך אחד 🙂</p>';
+    return;
+  }
+
+  const scored = recipes
+    .map(r => {
+      const lines = (r.ingredients || []).filter(i => !i.startsWith('__section__'));
+      if (!lines.length) return null;
+      const matched = lines.filter(line =>
+        items.some(item => line.toLowerCase().includes(item))
+      ).length;
+      return { r, matched, total: lines.length, pct: Math.round((matched / lines.length) * 100) };
+    })
+    .filter(x => x && x.matched > 0)
+    .sort((a, b) => b.pct - a.pct || b.matched - a.matched);
+
+  if (!scored.length) {
+    pantryResults.innerHTML = '<p class="pantry-empty">לא נמצאו מתכונים שמתאימים למצרכים האלה 😕</p>';
+    return;
+  }
+
+  pantryResults.innerHTML = `
+    <p class="pantry-results-title">המתכונים הקרובים ביותר:</p>
+    ${scored.map(x => `
+      <button class="pantry-result" data-id="${x.r.id}">
+        <span class="pantry-result-info">
+          <span class="pantry-result-name" dir="auto">${esc(x.r.title)}</span>
+          <span class="pantry-result-count">${x.matched} מתוך ${x.total} מצרכים</span>
+        </span>
+        <span class="pantry-result-pct ${x.pct >= 70 ? 'high' : x.pct >= 40 ? 'mid' : ''}">${x.pct}%</span>
+        <span class="pantry-result-bar"><span style="width:${x.pct}%"></span></span>
+      </button>`).join('')}
+  `;
+
+  pantryResults.querySelectorAll('.pantry-result').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const recipe = recipes.find(r => r.id == btn.dataset.id);
+      if (recipe) {
+        closePantry();
+        openModal(recipe);
+      }
+    });
+  });
+}
+
+pantryBtn.addEventListener('click', openPantry);
+pantryClose.addEventListener('click', closePantry);
+pantrySearch.addEventListener('click', runPantrySearch);
+pantryOverlay.addEventListener('click', (e) => { if (e.target === pantryOverlay) closePantry(); });
+pantryInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) runPantrySearch();
+});
 
 // ── Utility ───────────────────────────────────────────────────────────────────
 function esc(str) {

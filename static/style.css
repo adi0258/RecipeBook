@@ -297,6 +297,189 @@ main {
 .empty-state { text-align: center; padding: 3.5rem 1rem; color: var(--muted); }
 .empty-icon { font-size: 3rem; margin-bottom: .8rem; }
 
+/* ── Search + pantry toolbar ── */
+.toolbar {
+  display: flex;
+  gap: .65rem;
+  margin-bottom: 1rem;
+  direction: rtl;
+}
+#search-input {
+  flex: 1;
+  padding: .7rem 1.05rem;
+  border: 1.5px solid var(--border);
+  border-radius: 999px;
+  font-size: 16px;             /* prevents iOS zoom */
+  font-family: var(--font-body);
+  background: var(--surface);
+  color: var(--text);
+  transition: border-color .2s, box-shadow .2s;
+  min-width: 0;
+}
+#search-input::placeholder { color: #b9ab99; }
+#search-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.pantry-btn {
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  color: var(--accent-dark);
+  border-radius: 999px;
+  padding: .7rem 1.2rem;
+  font-size: .92rem; font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  min-height: 44px;
+  transition: border-color .15s, box-shadow .15s, transform .15s;
+  -webkit-tap-highlight-color: transparent;
+}
+.pantry-btn:hover { border-color: var(--accent); box-shadow: var(--shadow); transform: translateY(-1px); }
+
+/* ── Pantry modal ── */
+.pantry-modal { text-align: right; }
+.pantry-title {
+  font-family: var(--font-display);
+  font-size: 1.3rem; font-weight: 700;
+  margin-bottom: .3rem;
+}
+.pantry-hint { font-size: .88rem; color: var(--muted); margin-bottom: .7rem; }
+#pantry-input {
+  width: 100%;
+  padding: .8rem;
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 16px;
+  resize: vertical;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.55;
+  margin-bottom: .8rem;
+  transition: border-color .2s, box-shadow .2s;
+}
+#pantry-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+.pantry-empty { color: var(--muted); font-size: .92rem; margin-top: 1rem; }
+.pantry-results-title {
+  font-size: .8rem; font-weight: 700; color: var(--accent-dark);
+  text-transform: uppercase; letter-spacing: .8px;
+  margin: 1.2rem 0 .6rem;
+}
+.pantry-result {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: "info pct" "bar bar";
+  align-items: center;
+  gap: .3rem .8rem;
+  width: 100%;
+  text-align: right;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: .75rem .9rem;
+  margin-bottom: .55rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color .15s, transform .15s, box-shadow .15s;
+  -webkit-tap-highlight-color: transparent;
+}
+.pantry-result:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: var(--shadow); }
+.pantry-result-info { grid-area: info; display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
+.pantry-result-name {
+  font-weight: 700; font-size: .95rem; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pantry-result-count { font-size: .78rem; color: var(--muted); }
+.pantry-result-pct {
+  grid-area: pct;
+  font-weight: 700; font-size: 1.05rem;
+  color: var(--muted);
+}
+.pantry-result-pct.mid  { color: var(--accent); }
+.pantry-result-pct.high { color: #4a8c3f; }
+.pantry-result-bar {
+  grid-area: bar;
+  height: 5px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+  direction: ltr;
+}
+.pantry-result-bar span {
+  display: block; height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-dark));
+  border-radius: 3px;
+}
+
+/* ── Category filter bar ── */
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  margin-bottom: 1.25rem;
+  direction: rtl;
+  justify-content: flex-start;
+}
+.filter-chip {
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: .45rem 1.05rem;
+  font-size: .88rem; font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  min-height: 38px;
+  transition: background .15s, color .15s, border-color .15s, transform .15s;
+  -webkit-tap-highlight-color: transparent;
+}
+.filter-chip:hover { border-color: var(--accent); color: var(--accent-dark); }
+.filter-chip.active {
+  background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(160, 90, 35, .3);
+}
+
+/* ── Category chip on card ── */
+.card-category {
+  align-self: flex-start;
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+  font-size: .72rem; font-weight: 700;
+  border-radius: 999px;
+  padding: .18rem .7rem;
+  margin-bottom: .15rem;
+}
+
+/* ── Category select in modal ── */
+.category-row {
+  display: inline-flex;
+  align-items: center;
+  gap: .6rem;
+  margin-bottom: 1.1rem;
+}
+.category-label {
+  font-size: .8rem; font-weight: 700;
+  color: var(--muted);
+}
+.category-select {
+  font-family: inherit;
+  font-size: .88rem; font-weight: 600;
+  color: var(--accent-dark);
+  background: var(--accent-soft);
+  border: 1.5px solid #eed7bd;
+  border-radius: 999px;
+  padding: .35rem .8rem;
+  cursor: pointer;
+  min-height: 38px;
+  transition: border-color .15s;
+}
+.category-select:hover, .category-select:focus { border-color: var(--accent); outline: none; }
+
 /* ── Recipe grid ── */
 .recipe-grid {
   display: grid;
@@ -534,6 +717,10 @@ details > summary:hover { color: var(--accent-dark); }
   .input-row { flex-direction: column; }
   .input-row button { width: 100%; justify-content: center; }
 
+  /* toolbar: stack search above pantry button */
+  .toolbar { flex-direction: column; }
+  .pantry-btn { width: 100%; }
+
   /* two-column card grid */
   .recipe-grid { grid-template-columns: 1fr 1fr; gap: .85rem; }
   .card-title { font-size: .96rem; }
@@ -576,4 +763,5 @@ details > summary:hover { color: var(--accent-dark); }
     padding: 2.2rem;
   }
   .modal::before { display: none; }   /* no drag handle on desktop */
+  .pantry-modal { max-width: 540px; padding: 1.8rem; }
 }
