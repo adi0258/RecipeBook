@@ -2,6 +2,8 @@ import os
 import re
 import sqlite3
 import json
+import base64
+import html as html_lib
 import instaloader
 import uuid
 import urllib.request
@@ -146,12 +148,15 @@ def init_db():
                 steps       TEXT,
                 raw_caption TEXT,
                 image_url   TEXT,
+                image_data  TEXT,
                 local_image TEXT,
                 author      TEXT,
                 added_at    TEXT,
                 UNIQUE(user_id, url)
             )
         """)
+        # Migration for tables created before image_data existed
+        cur.execute("ALTER TABLE recipes ADD COLUMN IF NOT EXISTS image_data TEXT")
     else:
         con.executescript("""
             CREATE TABLE IF NOT EXISTS users (
@@ -172,12 +177,17 @@ def init_db():
                 steps        TEXT,
                 raw_caption  TEXT,
                 image_url    TEXT,
+                image_data   TEXT,
                 local_image  TEXT,
                 author       TEXT,
                 added_at     TEXT,
                 UNIQUE(user_id, url)
             );
         """)
+        try:
+            con.execute("ALTER TABLE recipes ADD COLUMN image_data TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
     con.commit()
     con.close()
 
@@ -448,41 +458,115 @@ def _fetch_post_with_fresh_loader(shortcode: str):
     return instaloader.Post.from_shortcode(fresh.context, shortcode)
 
 
+_CRAWLER_HEADERS = {
+    # Instagram serves full OG meta tags (caption + image) to link-preview
+    # crawlers, without login and regardless of the requester's IP.
+    "User-Agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+    "Accept-Language": "en",
+}
+
+_BROWSER_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/124.0.0.0 Safari/537.36"),
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
+def _http_get(url: str, timeout: int = 20, headers: dict = None) -> bytes:
+    req = urllib.request.Request(url, headers=headers or _BROWSER_HEADERS)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
+def _fetch_via_og(shortcode: str) -> dict | None:
+    """Fetch the post page as a link-preview crawler and read the
+    Open Graph meta tags. Returns caption (~first 1300 chars), image
+    URL and author — or None if the tags aren't served."""
+    try:
+        raw = _http_get(
+            f"https://www.instagram.com/p/{shortcode}/",
+            headers=_CRAWLER_HEADERS,
+        ).decode("utf-8", "ignore")
+    except Exception:
+        return None
+
+    def og(prop):
+        m = re.search(rf'property="og:{prop}"\s+content="([^"]*)"', raw)
+        return html_lib.unescape(m.group(1)) if m else ""
+
+    image_url = og("image")
+    title     = og("title")
+    desc      = og("description")
+
+    # og:title looks like:  Some Name on Instagram‎: "CAPTION"
+    caption = ""
+    m = re.search(r'on Instagram[^:]*:\s*["“](.*)["”]?\s*$', title, re.S)
+    if m:
+        caption = m.group(1).strip().rstrip('"”').strip()
+
+    # og:description looks like:  123 likes, 4 comments - username on July 9, 2026: "CAPTION"
+    author = ""
+    m = re.search(r'-\s*([\w.]+)\s+on\s+\w+\s+\d', desc)
+    if m:
+        author = m.group(1)
+    if not caption and desc:
+        m = re.search(r':\s*["“](.*)["”]?\s*$', desc, re.S)
+        if m:
+            caption = m.group(1).strip().rstrip('"”').strip()
+
+    if not caption and not image_url:
+        return None
+    return {"caption": caption, "image_url": image_url, "author": author}
+
+
+def _download_image_b64(image_url: str) -> str:
+    """Download an image and return it base64-encoded (empty string on failure)."""
+    try:
+        data = _http_get(image_url)
+        if data and len(data) < 4_000_000:   # cap ~4MB to keep DB rows sane
+            return base64.b64encode(data).decode("ascii")
+    except Exception:
+        pass
+    return ""
+
+
 def fetch_instagram_post(url: str) -> dict:
     shortcode = shortcode_from_url(url)
-    try:
-        post = _fetch_post_with_fresh_loader(shortcode)
-    except Exception as e:
-        msg = str(e)
-        if not msg or "NoneType" in msg or "subscriptable" in msg:
-            msg = ("Instagram returned an unexpected response. "
-                   "The post may be private, or Instagram may be "
-                   "temporarily blocking automated access. Please try again.")
-        raise RuntimeError(msg)
 
-    caption   = post.caption or ""
-    image_url = post.url or ""
+    caption = image_url = author = ""
 
-    # Download to /tmp so the proxy route can serve it
-    if image_url:
+    # Strategy 1: OG meta tags via crawler user-agent (most reliable)
+    og = _fetch_via_og(shortcode)
+    if og:
+        caption   = og["caption"]
+        image_url = og["image_url"]
+        author    = og["author"]
+
+    # Strategy 2: instaloader (full caption, but often blocked on Vercel)
+    if not caption:
         try:
-            filename = f"{shortcode}.jpg"
-            dest = os.path.join(IMAGES_DIR, filename)
-            if not os.path.exists(dest):
-                urllib.request.urlretrieve(image_url, dest)
-        except Exception:
-            pass
+            post = _fetch_post_with_fresh_loader(shortcode)
+            caption   = post.caption or caption
+            image_url = post.url or image_url
+            author    = getattr(post, "owner_username", "") or author
+        except Exception as e:
+            if not og:
+                msg = str(e) or "Instagram returned an unexpected response."
+                raise RuntimeError(msg)
 
-    local_image = f"/api/image/{shortcode}"
+    # Persist the actual image bytes so it never expires
+    image_data = _download_image_b64(image_url) if image_url else ""
 
     recipe = parse_recipe(caption)
     return {
         "shortcode": shortcode,
         "url": url,
-        "author": getattr(post, "owner_username", "") or "",
+        "author": author,
         "raw_caption": caption,
         "image_url": image_url,
-        "local_image": local_image,
+        "image_data": image_data,
+        "local_image": f"/api/image/{shortcode}",
         **recipe,
     }
 
@@ -506,54 +590,66 @@ def serve_image(shortcode):
     if not _re.match(r'^[A-Za-z0-9_-]{1,50}$', shortcode):
         return "Not found", 404
 
-    filename = f"{shortcode}.jpg"
-    dest = os.path.join(IMAGES_DIR, filename)
+    con = get_db()
+    cur = con.cursor()
+    cur.execute(_q("SELECT id, image_url, image_data FROM recipes WHERE shortcode=? LIMIT 1"),
+                (shortcode,))
+    row = _fetchone(cur)
+    con.close()
+    if not row:
+        return "Not found", 404
 
-    if not os.path.exists(dest):
-        con = get_db()
-        cur = con.cursor()
-        cur.execute(_q("SELECT image_url FROM recipes WHERE shortcode=? LIMIT 1"), (shortcode,))
-        row = _fetchone(cur)
-        con.close()
-        if not row:
-            return "Not found", 404
+    # 1. Image stored permanently in the DB — always wins
+    if row.get("image_data"):
+        try:
+            data = base64.b64decode(row["image_data"])
+            return Response(data, mimetype="image/jpeg",
+                            headers={"Cache-Control": "public, max-age=31536000"})
+        except Exception:
+            pass
 
-        cdn_url = row.get("image_url") or ""
+    # 2. Old recipe without stored bytes — try to recover the image
+    #    and persist it so this never has to happen again.
+    b64 = ""
+    if row.get("image_url"):
+        b64 = _download_image_b64(row["image_url"])
+    if not b64:
+        og = _fetch_via_og(shortcode)
+        if og and og["image_url"]:
+            b64 = _download_image_b64(og["image_url"])
+    if not b64:
+        try:
+            post = _fetch_post_with_fresh_loader(shortcode)
+            if post.url:
+                b64 = _download_image_b64(post.url)
+        except Exception:
+            pass
 
-        # Try the stored CDN URL first
-        downloaded = False
-        if cdn_url:
-            try:
-                urllib.request.urlretrieve(cdn_url, dest)
-                downloaded = True
-            except Exception:
-                pass
+    if not b64:
+        return "Could not fetch image", 502
 
-        # Stored URL expired — ask Instagram for a fresh one
-        if not downloaded:
-            try:
-                post = _fetch_post_with_fresh_loader(shortcode)
-                cdn_url = post.url or ""
-                if cdn_url:
-                    urllib.request.urlretrieve(cdn_url, dest)
-                    downloaded = True
-                    # Persist the refreshed URL so future requests don't re-fetch
-                    con2 = get_db()
-                    cur2 = con2.cursor()
-                    cur2.execute(_q("UPDATE recipes SET image_url=? WHERE shortcode=?"),
-                                 (cdn_url, shortcode))
-                    con2.commit()
-                    con2.close()
-            except Exception:
-                pass
+    # Persist recovered image permanently
+    try:
+        con2 = get_db()
+        cur2 = con2.cursor()
+        cur2.execute(_q("UPDATE recipes SET image_data=? WHERE shortcode=?"),
+                     (b64, shortcode))
+        con2.commit()
+        con2.close()
+    except Exception:
+        pass
 
-        if not downloaded:
-            return "Could not fetch image", 502
+    return Response(base64.b64decode(b64), mimetype="image/jpeg",
+                    headers={"Cache-Control": "public, max-age=31536000"})
 
-    with open(dest, "rb") as f:
-        data = f.read()
-    return Response(data, mimetype="image/jpeg",
-                    headers={"Cache-Control": "public, max-age=86400"})
+
+def _recipe_json(r: dict) -> dict:
+    """Prepare a recipe row for a JSON response: parse JSON fields and
+    drop the (potentially huge) base64 image blob."""
+    r.pop("image_data", None)
+    r["ingredients"] = json.loads(r["ingredients"] or "[]")
+    r["steps"]       = json.loads(r["steps"] or "[]")
+    return r
 
 
 @app.route("/api/recipes", methods=["GET"])
@@ -565,10 +661,7 @@ def list_recipes():
     cur.execute(_q("SELECT * FROM recipes WHERE user_id=? ORDER BY added_at DESC"), (uid,))
     rows = _fetchall(cur)
     con.close()
-    for r in rows:
-        r["ingredients"] = json.loads(r["ingredients"] or "[]")
-        r["steps"]       = json.loads(r["steps"] or "[]")
-    return jsonify(rows)
+    return jsonify([_recipe_json(r) for r in rows])
 
 
 @app.route("/api/recipes", methods=["POST"])
@@ -592,9 +685,7 @@ def add_recipe():
         if existing:
             con.close()
             con = None
-            existing["ingredients"] = json.loads(existing["ingredients"] or "[]")
-            existing["steps"]       = json.loads(existing["steps"] or "[]")
-            return jsonify(existing)
+            return jsonify(_recipe_json(existing))
 
         if manual_caption:
             shortcode = ""
@@ -602,13 +693,23 @@ def add_recipe():
                 shortcode = shortcode_from_url(url)
             except Exception:
                 pass
+            # Even with a manual caption, try to grab the image via OG tags
+            image_url = image_data = author = ""
+            if shortcode:
+                og = _fetch_via_og(shortcode)
+                if og:
+                    image_url = og["image_url"]
+                    author    = og["author"]
+                    if image_url:
+                        image_data = _download_image_b64(image_url)
             recipe = parse_recipe(manual_caption)
             info = {
                 "shortcode":   shortcode,
                 "url":         url,
-                "author":      "",
+                "author":      author,
                 "raw_caption": manual_caption,
-                "image_url":   "",
+                "image_url":   image_url,
+                "image_data":  image_data,
                 "local_image": f"/api/image/{shortcode}" if shortcode else "",
                 **recipe,
             }
@@ -620,24 +721,24 @@ def add_recipe():
             cur.execute("""
                 INSERT INTO recipes
                   (user_id, url, shortcode, title, ingredients, steps, raw_caption,
-                   image_url, local_image, author, added_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   image_url, image_data, local_image, author, added_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 RETURNING id
             """, (uid, info["url"], info["shortcode"], info["title"],
                   json.dumps(info["ingredients"]), json.dumps(info["steps"]),
-                  info["raw_caption"], info["image_url"], info["local_image"],
-                  info["author"], now))
+                  info["raw_caption"], info["image_url"], info["image_data"],
+                  info["local_image"], info["author"], now))
             row_id = cur.fetchone()["id"]
         else:
             cur.execute("""
                 INSERT INTO recipes
                   (user_id, url, shortcode, title, ingredients, steps, raw_caption,
-                   image_url, local_image, author, added_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                   image_url, image_data, local_image, author, added_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             """, (uid, info["url"], info["shortcode"], info["title"],
                   json.dumps(info["ingredients"]), json.dumps(info["steps"]),
-                  info["raw_caption"], info["image_url"], info["local_image"],
-                  info["author"], now))
+                  info["raw_caption"], info["image_url"], info["image_data"],
+                  info["local_image"], info["author"], now))
             row_id = cur.lastrowid
 
         con.commit()
@@ -645,9 +746,7 @@ def add_recipe():
         result = _fetchone(cur)
         con.close()
         con = None
-        result["ingredients"] = json.loads(result["ingredients"] or "[]")
-        result["steps"]       = json.loads(result["steps"] or "[]")
-        return jsonify(result), 201
+        return jsonify(_recipe_json(result)), 201
 
     except Exception as e:
         import traceback
@@ -703,9 +802,7 @@ def update_recipe(recipe_id):
     cur.execute(_q("SELECT * FROM recipes WHERE id=?"), (recipe_id,))
     result = _fetchone(cur)
     con.close()
-    result["ingredients"] = json.loads(result["ingredients"] or "[]")
-    result["steps"]       = json.loads(result["steps"] or "[]")
-    return jsonify(result)
+    return jsonify(_recipe_json(result))
 
 
 init_db()
