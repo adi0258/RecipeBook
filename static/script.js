@@ -118,28 +118,93 @@ function renderGrid() {
 }
 
 // ── Add recipe ────────────────────────────────────────────────────────────────
+let _pendingUrl = '';   // URL saved while waiting for manual caption
+
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
   const url = urlInput.value.trim();
   if (!url) return;
 
+  hideManualFallback();
   setLoading(true);
   addError.hidden = true;
 
   try {
-    const res = await fetch(`${API}/api/recipes`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Something went wrong');
-
+    const data = await submitRecipe(url);
     const exists = recipes.find(r => r.id === data.id);
     if (!exists) recipes.unshift(data);
     renderGrid();
     urlInput.value = '';
+    openModal(data);
+  } catch (err) {
+    if (err.instagram_blocked) {
+      _pendingUrl = url;
+      showManualFallback(err.message);
+    } else {
+      addError.textContent = err.message;
+      addError.hidden = false;
+    }
+  } finally {
+    setLoading(false);
+  }
+});
+
+async function submitRecipe(url, caption = null) {
+  const body = { url };
+  if (caption) body.caption = caption;
+  const res = await fetch(`${API}/api/recipes`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    const err = new Error(data.error || 'Something went wrong');
+    err.instagram_blocked = data.instagram_blocked || false;
+    throw err;
+  }
+  return data;
+}
+
+// ── Manual caption fallback ───────────────────────────────────────────────────
+const manualFallback = document.getElementById('manual-fallback');
+const manualCaption  = document.getElementById('manual-caption');
+const manualSubmit   = document.getElementById('manual-submit');
+const manualCancel   = document.getElementById('manual-cancel');
+
+function showManualFallback(errorMsg) {
+  addError.textContent = errorMsg;
+  addError.hidden = false;
+  manualFallback.hidden = false;
+  manualCaption.focus();
+}
+
+function hideManualFallback() {
+  manualFallback.hidden = true;
+  manualCaption.value = '';
+  _pendingUrl = '';
+}
+
+manualCancel.addEventListener('click', () => {
+  hideManualFallback();
+  addError.hidden = true;
+});
+
+manualSubmit.addEventListener('click', async () => {
+  const caption = manualCaption.value.trim();
+  if (!caption || !_pendingUrl) return;
+
+  setLoading(true);
+  addError.hidden = true;
+
+  try {
+    const data = await submitRecipe(_pendingUrl, caption);
+    const exists = recipes.find(r => r.id === data.id);
+    if (!exists) recipes.unshift(data);
+    renderGrid();
+    urlInput.value = '';
+    hideManualFallback();
     openModal(data);
   } catch (err) {
     addError.textContent = err.message;

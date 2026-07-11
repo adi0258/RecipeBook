@@ -181,6 +181,63 @@ main {
 
 .error-msg { color: #c0392b; margin-top: .6rem; font-size: .9rem; }
 
+/* ── Manual caption fallback ── */
+#manual-fallback {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: #fff8f0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.manual-fallback-label {
+  font-size: .9rem;
+  color: var(--muted);
+  margin-bottom: .5rem;
+}
+#manual-caption {
+  width: 100%;
+  padding: .75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: .95rem;
+  resize: vertical;
+  background: var(--surface);
+  color: var(--text);
+  line-height: 1.5;
+}
+#manual-caption:focus { outline: none; border-color: var(--accent); }
+.manual-fallback-actions {
+  display: flex;
+  gap: .6rem;
+  margin-top: .75rem;
+  flex-wrap: wrap;
+}
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  padding: .65rem 1.2rem;
+  font-size: .95rem;
+  font-family: inherit;
+  cursor: pointer;
+  min-height: 44px;
+}
+.btn-primary:hover { background: var(--accent-dark); }
+.btn-ghost {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: .65rem 1.2rem;
+  font-size: .95rem;
+  font-family: inherit;
+  cursor: pointer;
+  min-height: 44px;
+}
+.btn-ghost:hover { background: var(--border); }
+
 /* ── Empty state ── */
 .empty-state { text-align: center; padding: 3rem 1rem; color: var(--muted); }
 .empty-icon { font-size: 2.8rem; margin-bottom: .8rem; }

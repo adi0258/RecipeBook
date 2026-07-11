@@ -582,6 +582,9 @@ def add_recipe():
         if not url:
             return jsonify({"error": "url is required"}), 400
 
+        # Optional manual caption — skips Instagram scraping entirely
+        manual_caption = data.get("caption", "").strip()
+
         con = get_db()
         cur = con.cursor()
         cur.execute(_q("SELECT * FROM recipes WHERE user_id=? AND url=?"), (uid, url))
@@ -593,7 +596,24 @@ def add_recipe():
             existing["steps"]       = json.loads(existing["steps"] or "[]")
             return jsonify(existing)
 
-        info = fetch_instagram_post(url)
+        if manual_caption:
+            shortcode = ""
+            try:
+                shortcode = shortcode_from_url(url)
+            except Exception:
+                pass
+            recipe = parse_recipe(manual_caption)
+            info = {
+                "shortcode":   shortcode,
+                "url":         url,
+                "author":      "",
+                "raw_caption": manual_caption,
+                "image_url":   "",
+                "local_image": f"/api/image/{shortcode}" if shortcode else "",
+                **recipe,
+            }
+        else:
+            info = fetch_instagram_post(url)
 
         now = datetime.utcnow().isoformat()
         if _USE_PG:
@@ -642,11 +662,13 @@ def add_recipe():
             except Exception:
                 pass
         msg = str(e)
-        # Surface a friendlier message when Instagram blocks the request
-        if "graphql" in msg.lower() or "403" in msg or "429" in msg or "json" in msg.lower():
-            msg = ("Instagram couldn't be reached right now (Instagram may be "
-                   "blocking automated access). Please try again in a few minutes.")
-        return jsonify({"error": msg}), 422
+        instagram_blocked = any(k in msg.lower() for k in
+                                ("graphql", "metadata failed", "403", "429",
+                                 "json", "nonetype", "subscriptable", "unexpected"))
+        if instagram_blocked:
+            msg = ("Instagram couldn't be reached right now. "
+                   "You can paste the post caption manually instead.")
+        return jsonify({"error": msg, "instagram_blocked": instagram_blocked}), 422
 
 
 @app.route("/api/recipes/<int:recipe_id>", methods=["DELETE"])

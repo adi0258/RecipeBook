@@ -69,6 +69,22 @@
         </div>
         <p id="add-error" class="error-msg" hidden></p>
       </form>
+
+      <!-- Manual caption fallback (shown when Instagram is blocked) -->
+      <div id="manual-fallback" hidden>
+        <p class="manual-fallback-label">
+          Paste the post caption below and we'll parse it for you:
+        </p>
+        <textarea
+          id="manual-caption"
+          rows="6"
+          placeholder="Paste the Instagram post caption here…"
+        ></textarea>
+        <div class="manual-fallback-actions">
+          <button id="manual-submit" class="btn-primary">Parse & Save Recipe</button>
+          <button id="manual-cancel" class="btn-ghost">Cancel</button>
+        </div>
+      </div>
     </section>
 
     <!-- Empty state -->
