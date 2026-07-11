@@ -1,0 +1,185 @@
+/* Base: reset, theme variables, RTL, header, layout, footer.
+   Component styles live in components.css; modals in modal.css. */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+[hidden] { display: none !important; }
+
+/* ── RTL support ── */
+[dir="rtl"] { text-align: right; }
+[dir="rtl"].ingredients-list,
+[dir="rtl"].steps-list { padding-inline-start: 0; padding-inline-end: 1.4rem; }
+[dir="rtl"] .step-num { margin-right: 0; margin-left: 0.6rem; }
+
+:root {
+  --bg: #f7f1e8;
+  --surface: #fffdf9;
+  --border: #e9dfd0;
+  --accent: #c46f34;
+  --accent-dark: #9e5522;
+  --accent-soft: #f7e8d9;
+  --text: #2b2115;
+  --muted: #8a7a68;
+  --radius: 16px;
+  --shadow: 0 2px 14px rgba(90, 55, 20, .09);
+  --shadow-lg: 0 14px 44px rgba(90, 55, 20, .18);
+  --font-display: 'Frank Ruhl Libre', Georgia, serif;
+  --font-body: 'Assistant', -apple-system, 'Segoe UI', sans-serif;
+  /* iPhone safe areas */
+  --safe-top:    env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left:   env(safe-area-inset-left, 0px);
+  --safe-right:  env(safe-area-inset-right, 0px);
+}
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  font-family: var(--font-body);
+  background:
+    radial-gradient(1200px 500px at 85% -10%, #fdf6ec 0%, transparent 60%),
+    linear-gradient(180deg, #f9f3ea 0%, var(--bg) 320px);
+  color: var(--text);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Accessible focus rings */
+a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── Header ── */
+header {
+  background: linear-gradient(120deg, #cf7a3e 0%, #b96430 55%, #a2521f 100%);
+  color: #fff;
+  padding: 1.4rem 1.5rem;
+  padding-top: calc(1.4rem + var(--safe-top));
+  padding-left:  calc(1.5rem + var(--safe-left));
+  padding-right: calc(1.5rem + var(--safe-right));
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 3px 18px rgba(120, 65, 20, .28);
+}
+/* soft decorative glow */
+header::after {
+  content: '';
+  position: absolute;
+  top: -60%; right: -5%;
+  width: 340px; height: 340px;
+  background: radial-gradient(circle, rgba(255,235,205,.28) 0%, transparent 70%);
+  pointer-events: none;
+}
+.header-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  position: relative;
+  z-index: 1;
+}
+.header-left { display: flex; flex-direction: column; gap: .2rem; min-width: 0; }
+header h1 {
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: 1.9rem;
+  letter-spacing: .3px;
+  white-space: nowrap;
+  text-shadow: 0 1px 3px rgba(90, 45, 10, .3);
+}
+.subtitle { font-size: .85rem; opacity: .92; font-weight: 400; }
+
+/* ── Auth area ── */
+.header-right { display: flex; align-items: center; flex-shrink: 0; gap: .45rem; }
+
+.user-chip {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  background: rgba(255,255,255,.16);
+  border: 1px solid rgba(255,255,255,.22);
+  backdrop-filter: blur(4px);
+  border-radius: 999px;
+  padding: .35rem .8rem .35rem .35rem;
+}
+.user-chip img {
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,.55);
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.user-chip .user-name {
+  font-size: .84rem; font-weight: 600; color: #fff;
+  max-width: 120px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.logout-btn {
+  background: rgba(255,255,255,.18);
+  border: 1px solid rgba(255,255,255,.32);
+  color: #fff; border-radius: 999px;
+  padding: .4rem .85rem; font-size: .8rem; font-weight: 600;
+  cursor: pointer; text-decoration: none;
+  transition: background .15s;
+  white-space: nowrap;
+  min-height: 36px; display: flex; align-items: center;
+}
+.logout-btn:hover { background: rgba(255,255,255,.32); }
+
+.header-login-btn {
+  display: flex; align-items: center; gap: .45rem;
+  background: #fff; color: #4b3a28;
+  border-radius: 999px; padding: .45rem 1rem;
+  font-size: .85rem; font-weight: 700;
+  text-decoration: none;
+  box-shadow: 0 2px 8px rgba(60, 30, 5, .25);
+  white-space: nowrap;
+  min-height: 36px;
+  transition: transform .15s, box-shadow .15s;
+}
+.header-login-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(60, 30, 5, .3); }
+
+/* ── Main content ── */
+main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1.75rem 1rem;
+  padding-left:  calc(1rem + var(--safe-left));
+  padding-right: calc(1rem + var(--safe-right));
+  padding-bottom: calc(1.75rem + var(--safe-bottom));
+}
+
+/* ── Footer ── */
+.site-footer {
+  text-align: center;
+  padding: 1.4rem 1rem calc(1.4rem + var(--safe-bottom));
+  font-size: 0.8rem;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  margin-top: 2.5rem;
+}
+
+/* ── Spinner ── */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinning { display: inline-block; animation: spin 1s linear infinite; }
+
+/* ── Reduced motion ── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* ── Mobile (≤ 600px) ── */
+@media (max-width: 600px) {
+  header h1 { font-size: 1.5rem; }
+  .subtitle  { display: none; }
+  /* hide header login btn — banner already has sign-in buttons */
+  .header-login-btn { display: none; }
+  /* signed-in: just show avatar + sign out, hide name */
+  .user-chip .user-name { display: none; }
+}
+
+/* ── Very small (≤ 380px, iPhone SE) ── */
+@media (max-width: 380px) {
+  header h1 { font-size: 1.35rem; }
+}
