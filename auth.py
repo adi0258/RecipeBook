@@ -69,6 +69,7 @@ def auth_login():
 @auth_bp.route("/auth/callback")
 def auth_callback():
     token = google.authorize_access_token()
+    session.permanent = True
     userinfo = token.get("userinfo") or google.userinfo()
     session["user"] = upsert_user(
         google_id=userinfo["sub"],
@@ -87,6 +88,7 @@ def auth_logout():
 
 @auth_bp.route("/auth/guest")
 def auth_guest():
+    session.permanent = True
     guest_id = f"guest_{uuid.uuid4().hex[:16]}"
     session["user"] = upsert_user(
         google_id=guest_id, email=None, name="Guest", picture=None,

@@ -5,6 +5,7 @@ parsing.py (GPT/regex caption parsing), instagram.py (post fetching),
 recipes.py (API routes). Vercel imports `app` via api/index.py.
 """
 import os
+from datetime import timedelta
 from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
 
@@ -21,6 +22,12 @@ app = Flask(
     template_folder=os.path.join(_HERE, "templates"),
 )
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-in-production")
+app.config.update(
+    PERMANENT_SESSION_LIFETIME=timedelta(days=365),
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=not app.debug and bool(os.environ.get("VERCEL")),
+    SESSION_COOKIE_HTTPONLY=True,
+)
 CORS(app, supports_credentials=True)
 
 oauth.init_app(app)
